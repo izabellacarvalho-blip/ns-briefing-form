@@ -1,0 +1,564 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+<meta charset="UTF-8"/>
+<meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+<title>Nuvemshop Â· Gerador de Briefing com IA</title>
+<script src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
+<script src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
+<script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+<script src="https://unpkg.com/mammoth@1.6.0/mammoth.browser.min.js"></script>
+<style>
+*{box-sizing:border-box;margin:0;padding:0}
+html,body{min-height:100vh;background:#F0F4FF;font-family:Inter,system-ui,sans-serif}
+#root{min-height:100vh;display:flex;flex-direction:column;align-items:center;padding:32px 16px}
+input,textarea,button{font-family:inherit}
+textarea{resize:vertical}
+@keyframes pulse{0%,100%{opacity:1}50%{opacity:.4}}
+@keyframes spin{to{transform:rotate(360deg)}}
+.rec{animation:pulse 1s infinite}
+</style>
+</head>
+<body>
+<div id="root"></div>
+<script type="text/babel">
+const {useState,useRef,useCallback}=React;
+
+
+const NS = {
+  blue:      "#0050C3",
+  skyBlue:   "#00B4E6",
+  clearBlue: "#99D3FF",
+  darkBlue:  "#100E4C",
+  white:     "#FFFFFF",
+  tint:      "#E8F2FF",
+  lightTint: "#F4F8FF",
+  border:    "#BDD5FF",
+  gray:      "#6B7280",
+  grayLight: "#F4F6FA",
+};
+
+const STEPS = ["IdentificaÃ§Ã£o","Contexto & Objetivo","CTA & Entregas","Mensagens & Arquivos","Preview"];
+
+const INITIAL = {
+  idNuvemshop:"", influenciador:"", tema:"", dataPublicacao:"",
+  entregas:"", formato:"9:16 vertical", collab:"", responsavel:"",
+  contexto:"", linkMateriais:"",
+  objPrincipal:"", objConteudo:"", objNegocio:"",
+  cta:"", linkCta:"",
+  e1tema:"", e1data:"", e1formato:"", e1objetivo:"", e1destaques:"",
+  e2tema:"", e2data:"", e2formato:"", e2objetivo:"", e2destaques:"",
+  msgChave1:"", msgChave1sub:"", msgChave2:"", msgChave2sub:"", msgChave3:"", msgChave3sub:"",
+};
+
+const SYSTEM_PROMPT = `VocÃª Ã© um especialista em social media da Nuvemshop, maior plataforma de e-commerce da AmÃ©rica Latina.
+Ao melhorar textos de briefings, mantenha o tom: direto, atrevido, culturalmente conectado, realista e otimista.
+Nunca use promessas vazias. Seja empÃ¡tico mas vÃ¡ direto ao ponto.
+Responda APENAS com o texto melhorado, sem introduÃ§Ã£o, explicaÃ§Ã£o ou formataÃ§Ã£o extra.`;
+
+async function callClaude(userMsg, systemExtra = "") {
+  const res = await fetch("https://api.anthropic.com/v1/messages", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      model: "claude-sonnet-4-20250514",
+      max_tokens: 1000,
+      system: SYSTEM_PROMPT + (systemExtra ? "\n\nContexto adicional do projeto:\n" + systemExtra : ""),
+      messages: [{ role: "user", content: userMsg }],
+    }),
+  });
+  const data = await res.json();
+  return data.content?.[0]?.text || "";
+}
+
+export default function BriefingForm() {
+  const [step, setStep] = useState(0);
+  const [form, setForm] = useState(INITIAL);
+  const [improving, setImproving] = useState({});
+  const [fileCtx, setFileCtx] = useState("");
+  const [fileName, setFileName] = useState("");
+  const [fileError, setFileError] = useState("");
+  const [generating, setGenerating] = useState(false);
+  const [generatedCtx, setGeneratedCtx] = useState("");
+  const fileRef = useRef();
+
+  const set = (k, v) => setForm(f => ({ ...f, [k]: v }));
+
+  const improve = async (field, prompt) => {
+    if (!form[field]?.trim()) return;
+    setImproving(i => ({ ...i, [field]: true }));
+    try {
+      const improved = await callClaude(
+        `Melhore este texto para um briefing da Nuvemshop. Campo: "${prompt}"\n\nTexto atual:\n${form[field]}`,
+        fileCtx
+      );
+      set(field, improved);
+    } catch (e) { console.error(e); }
+    setImproving(i => ({ ...i, [field]: false }));
+  };
+
+  const handleFile = async (e) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    setFileError(""); setFileCtx(""); setFileName(file.name);
+    try {
+      if (file.name.endsWith(".docx")) {
+        const buf = await file.arrayBuffer();
+        const { value } = await mammoth.extractRawText({ arrayBuffer: buf });
+        setFileCtx(value.slice(0, 4000));
+      } else if (file.type === "application/pdf" || file.name.endsWith(".pdf")) {
+        const buf = await file.arrayBuffer();
+        const b64 = btoa(String.fromCharCode(...new Uint8Array(buf)));
+        setGenerating(true);
+        const res = await fetch("https://api.anthropic.com/v1/messages", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            model: "claude-sonnet-4-20250514", max_tokens: 1000,
+            messages: [{ role: "user", content: [
+              { type: "document", source: { type: "base64", media_type: "application/pdf", data: b64 } },
+              { type: "text", text: "Extraia os pontos principais deste documento em atÃ© 300 palavras para uso como contexto de briefing." }
+            ]}],
+          }),
+        });
+        const data = await res.json();
+        setFileCtx(data.content?.[0]?.text || "");
+        setGenerating(false);
+      } else if (file.type.startsWith("text/")) {
+        const text = await file.text();
+        setFileCtx(text.slice(0, 4000));
+      } else if (file.type.startsWith("image/")) {
+        const buf = await file.arrayBuffer();
+        const b64 = btoa(String.fromCharCode(...new Uint8Array(buf)));
+        setGenerating(true);
+        const res = await fetch("https://api.anthropic.com/v1/messages", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            model: "claude-sonnet-4-20250514", max_tokens: 500,
+            messages: [{ role: "user", content: [
+              { type: "image", source: { type: "base64", media_type: file.type, data: b64 } },
+              { type: "text", text: "Descreva o conteÃºdo desta imagem para uso como contexto de briefing." }
+            ]}],
+          }),
+        });
+        const data = await res.json();
+        setFileCtx(data.content?.[0]?.text || "");
+        setGenerating(false);
+      } else {
+        setFileError("Formato nÃ£o suportado. Use PDF, DOCX, TXT ou imagens.");
+      }
+    } catch (err) {
+      setFileError("Erro ao ler o arquivo. Tente novamente."); setGenerating(false);
+    }
+  };
+
+  const generateBriefing = async () => {
+    setGenerating(true);
+    try {
+      const summary = await callClaude(
+        `Com base nas informaÃ§Ãµes abaixo, gere um contexto final completo e polido para o briefing da Nuvemshop.\n\nInfluenciador: ${form.influenciador}\nTema: ${form.tema}\nContexto atual: ${form.contexto}\nObjetivo Principal: ${form.objPrincipal}\nObjetivo ConteÃºdo: ${form.objConteudo}\nObjetivo NegÃ³cio: ${form.objNegocio}\nCTA: ${form.cta}`,
+        fileCtx
+      );
+      setGeneratedCtx(summary);
+    } catch (e) { console.error(e); }
+    setGenerating(false);
+    setStep(4);
+  };
+
+  const downloadHTML = () => {
+    const f = form;
+    const html = `<!DOCTYPE html><html lang="pt-BR"><head><meta charset="UTF-8"/>
+<title>Briefing ${f.influenciador || "Influenciador"} â Nuvemshop</title>
+<style>
+  *{box-sizing:border-box;margin:0;padding:0}
+  body{font-family:Inter,Arial,sans-serif;color:#100E4C;background:#fff;font-size:14px;line-height:1.6}
+  .header{background:#0050C3;color:#fff;padding:40px 48px}
+  .header p{color:#99D3FF;font-size:13px;margin-bottom:8px}
+  .header h1{font-size:32px;font-weight:700;margin-bottom:6px}
+  .header h2{font-size:17px;font-weight:400;color:#BDD5FF}
+  .body{padding:48px}
+  .section{margin-bottom:32px}
+  .sec-title{background:#0050C3;color:#fff;font-size:15px;font-weight:700;padding:10px 18px;margin-bottom:12px}
+  table{width:100%;border-collapse:collapse;margin-bottom:16px}
+  td{padding:8px 12px;border:1px solid #BDD5FF;font-size:13px;vertical-align:top}
+  td.lbl{background:#99D3FF;color:#0050C3;font-weight:700;width:28%;font-size:12px}
+  tr:nth-child(even) td:not(.lbl){background:#F4F8FF}
+  .highlight{border-left:4px solid #00B4E6;background:#E8F2FF;padding:12px 16px;margin-bottom:16px;font-size:13px;font-style:italic}
+  ul{padding-left:20px;margin-bottom:12px}
+  ul li{margin-bottom:6px;font-size:13px}
+  .sig{background:#F4F6FA;border-top:3px solid #0050C3;padding:20px 48px;font-size:12px;color:#6B7280;display:flex;justify-content:space-between;align-items:center}
+  .story-card{margin-bottom:16px;border:1px solid #BDD5FF}
+  .story-head{background:#0050C3;color:#fff;font-weight:700;font-size:13px;padding:8px 14px}
+  .story-body{display:grid;grid-template-columns:1fr 1fr;gap:0}
+  .story-col{padding:12px 14px;font-size:12px}
+  .story-col:first-child{background:#F4F8FF;border-right:1px solid #BDD5FF}
+  .col-title{font-weight:700;color:#0050C3;font-size:11px;text-transform:uppercase;margin-bottom:6px}
+</style></head><body>
+<div class="header">
+  <p>NUVEMSHOP Â· ID: ${f.idNuvemshop || "â"}</p>
+  <h1>Briefing de ConteÃºdo</h1>
+  <h2>Influenciadores / Criadores de ConteÃºdo</h2>
+</div>
+<div class="body">
+  <div class="section">
+    <div class="sec-title">01 Â· INFORMAÃÃES GERAIS</div>
+    <table>
+      <tr><td class="lbl">ID Nuvemshop:</td><td>${f.idNuvemshop||"â"}</td></tr>
+      <tr><td class="lbl">Influenciador(a):</td><td>${f.influenciador||"â"}</td></tr>
+      <tr><td class="lbl">Tema do conteÃºdo:</td><td>${f.tema||"â"}</td></tr>
+      <tr><td class="lbl">Data de publicaÃ§Ã£o:</td><td>${f.dataPublicacao||"â"}</td></tr>
+      <tr><td class="lbl">Entregas:</td><td>${f.entregas||"â"}</td></tr>
+      <tr><td class="lbl">Formato:</td><td>${f.formato||"â"}</td></tr>
+      <tr><td class="lbl">Collab:</td><td>${f.collab||"â"}</td></tr>
+      <tr><td class="lbl">ResponsÃ¡vel NS:</td><td>${f.responsavel||"â"}</td></tr>
+    </table>
+  </div>
+  <div class="section">
+    <div class="sec-title">02 Â· CONTEXTO DA CAMPANHA</div>
+    <p style="font-size:13px;margin-bottom:12px">${(form.contexto||"â").replace(/\n/g,"<br/>")}</p>
+    ${f.linkMateriais?`<div class="highlight">ð Materiais de apoio: <a href="${f.linkMateriais}" style="color:#0050C3">${f.linkMateriais}</a></div>`:""}
+    ${generatedCtx?`<div class="highlight" style="font-style:normal"><strong>SÃ­ntese IA:</strong><br/>${generatedCtx.replace(/\n/g,"<br/>")}</div>`:""}
+  </div>
+  <div class="section">
+    <div class="sec-title">03 Â· OBJETIVO DO CONTEÃDO</div>
+    <ul>
+      ${f.objPrincipal?`<li><strong>${f.objPrincipal}</strong></li>`:""}
+      ${f.objConteudo?`<li>${f.objConteudo}</li>`:""}
+      ${f.objNegocio?`<li>${f.objNegocio}</li>`:""}
+    </ul>
+  </div>
+  <div class="section">
+    <div class="sec-title">04 Â· CTA</div>
+    <p style="font-size:13px;margin-bottom:8px">${f.cta||"â"}</p>
+    ${f.linkCta?`<table><tr><td class="lbl">Link:</td><td><a href="${f.linkCta}" style="color:#0050C3">${f.linkCta}</a></td></tr></table>`:""}
+  </div>
+  ${(f.e1tema||f.e1objetivo)?`<div class="section">
+    <div class="sec-title">05 Â· DETALHAMENTO DAS ENTREGAS</div>
+    <p style="font-weight:700;color:#0050C3;border-left:3px solid #00B4E6;padding-left:10px;margin-bottom:10px;font-size:13px">ENTREGA #01 â ${f.e1tema||"Entrega 1"}</p>
+    <table>
+      <tr><td class="lbl">Tema:</td><td>${f.e1tema||"â"}</td></tr>
+      <tr><td class="lbl">Data:</td><td>${f.e1data||"â"}</td></tr>
+      <tr><td class="lbl">Formato:</td><td>${f.e1formato||"â"}</td></tr>
+      <tr><td class="lbl">Objetivo:</td><td>${f.e1objetivo||"â"}</td></tr>
+    </table>
+    ${f.e1destaques?`<ul>${f.e1destaques.split("\n").filter(Boolean).map(d=>`<li>${d}</li>`).join("")}</ul>`:""}
+    ${(f.e2tema||f.e2objetivo)?`<p style="font-weight:700;color:#0050C3;border-left:3px solid #00B4E6;padding-left:10px;margin:16px 0 10px;font-size:13px">ENTREGA #02 â ${f.e2tema||"Entrega 2"}</p>
+    <table>
+      <tr><td class="lbl">Tema:</td><td>${f.e2tema||"â"}</td></tr>
+      <tr><td class="lbl">Data:</td><td>${f.e2data||"â"}</td></tr>
+      <tr><td class="lbl">Formato:</td><td>${f.e2formato||"â"}</td></tr>
+      <tr><td class="lbl">Objetivo:</td><td>${f.e2objetivo||"â"}</td></tr>
+    </table>
+    ${f.e2destaques?`<ul>${f.e2destaques.split("\n").filter(Boolean).map(d=>`<li>${d}</li>`).join("")}</ul>`:""}`:""}
+  </div>`:""}
+  ${(f.msgChave1||f.msgChave2||f.msgChave3)?`<div class="section">
+    <div class="sec-title">06 Â· MENSAGENS-CHAVE SOBRE A NUVEMSHOP</div>
+    <ul>
+      ${f.msgChave1?`<li><strong>${f.msgChave1}</strong>${f.msgChave1sub?` â ${f.msgChave1sub}`:""}</li>`:""}
+      ${f.msgChave2?`<li><strong>${f.msgChave2}</strong>${f.msgChave2sub?` â ${f.msgChave2sub}`:""}</li>`:""}
+      ${f.msgChave3?`<li><strong>${f.msgChave3}</strong>${f.msgChave3sub?` â ${f.msgChave3sub}`:""}</li>`:""}
+    </ul>
+    <div class="highlight">ð Assinatura obrigatÃ³ria: "Faz bonito. Faz com a Nuvemshop, a maior plataforma de e-commerce do Brasil e da AmÃ©rica Latina."</div>
+  </div>`:""}
+  <div class="section">
+    <div class="sec-title">07 Â· TOM DE VOZ DA MARCA</div>
+    <ul>
+      <li>Ir direto ao ponto, sem voltas para chegar na mensagem principal</li>
+      <li>Se permitir brincar e provocar</li>
+      <li>Usar palavras, gÃ­rias ou expressÃµes do dia a dia â como se falasse com alguÃ©m prÃ³ximo</li>
+    </ul>
+  </div>
+  <div class="section">
+    <div class="sec-title">08 Â· INSERÃÃO DA NUVEMSHOP NOS CONTEÃDOS</div>
+    <ul>
+      <li>PreferÃªncia por roupas azul e branco para Nuvemshop; preto para Nuvemshop Next</li>
+      <li>Sempre trazer cenas interagindo com a loja virtual â celular ou computador</li>
+      <li>Priorizar mostrar o layout da loja, produtos e notificaÃ§Ãµes de vendas</li>
+      <li>AtenÃ§Ã£o Ã  escrita correta: <strong>Nuvemshop</strong> (sem separar, sem maiÃºsculo no meio)</li>
+    </ul>
+  </div>
+  <div class="section">
+    <div class="sec-title">09 Â· FLUXO DE APROVAÃÃO E PUBLICAÃÃO</div>
+    <ul>
+      <li>Acessar os direcionais Nuvemshop antes de iniciar (fontes, cores e diagramaÃ§Ãµes)</li>
+      <li>PreferÃªncia de gravaÃ§Ã£o com luzes brancas/neutras</li>
+      <li>ConteÃºdo de acordo com as regras do CONAR</li>
+      <li>Roteiro enviado previamente para aprovaÃ§Ã£o da equipe Nuvemshop</li>
+      <li>PublicaÃ§Ã£o sÃ³ ocorre apÃ³s liberaÃ§Ã£o da equipe</li>
+    </ul>
+  </div>
+</div>
+<div class="sig">
+  <span>nuvemshop Â· Social Media Â· ID: ${f.idNuvemshop||"â"}</span>
+  <span style="font-style:italic">Uso interno â aprovaÃ§Ã£o obrigatÃ³ria antes do envio</span>
+</div>
+</body></html>`;
+    const blob = new Blob([html], { type: "text/html;charset=utf-8" });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    const name = (f.influenciador || "Influenciador").replace(/\s+/g, "_");
+    a.href = url; a.download = `NS_Briefing_${name}_${f.idNuvemshop||"ID"}.html`;
+    a.click(); URL.revokeObjectURL(url);
+  };
+
+  const Field = ({ label, name, type = "input", rows = 3, hint, aiPrompt, half }) => {
+    const val = form[name];
+    const busy = improving[name];
+    return (
+      <div style={{ marginBottom: 16, gridColumn: half ? "span 1" : "span 2" }}>
+        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 4 }}>
+          <label style={{ fontSize: 12, fontWeight: 500, color: NS.darkBlue }}>{label}</label>
+          {aiPrompt && type === "textarea" && (
+            <button
+              onClick={() => improve(name, aiPrompt)}
+              disabled={busy || !val}
+              style={{
+                fontSize: 11, padding: "2px 10px", borderRadius: 12,
+                border: `1px solid ${NS.skyBlue}`, background: busy ? NS.clearBlue : NS.tint,
+                color: NS.blue, cursor: busy || !val ? "default" : "pointer", opacity: !val ? 0.4 : 1,
+                display: "flex", alignItems: "center", gap: 4
+              }}>
+              {busy ? "melhorando..." : "â¦ melhorar com IA"}
+            </button>
+          )}
+        </div>
+        {type === "textarea" ? (
+          <textarea
+            rows={rows} value={val}
+            onChange={e => set(name, e.target.value)}
+            placeholder={hint || label}
+            style={{ width: "100%", padding: "8px 10px", fontSize: 13, fontFamily: "Inter,sans-serif",
+              border: `1px solid ${NS.border}`, borderRadius: 6, resize: "vertical",
+              color: NS.darkBlue, background: NS.white, outline: "none" }} />
+        ) : (
+          <input
+            type="text" value={val}
+            onChange={e => set(name, e.target.value)}
+            placeholder={hint || label}
+            style={{ width: "100%", padding: "8px 10px", fontSize: 13, fontFamily: "Inter,sans-serif",
+              border: `1px solid ${NS.border}`, borderRadius: 6,
+              color: NS.darkBlue, background: NS.white, outline: "none" }} />
+        )}
+      </div>
+    );
+  };
+
+  const SectionTitle = ({ n, t }) => (
+    <div style={{ background: NS.blue, color: NS.white, padding: "10px 16px", marginBottom: 20, borderRadius: 4, fontWeight: 700, fontSize: 14 }}>
+      {n} Â· {t}
+    </div>
+  );
+
+  const grid = { display: "grid", gridTemplateColumns: "1fr 1fr", gap: "0 16px" };
+
+  const renderStep = () => {
+    if (step === 0) return (
+      <div>
+        <SectionTitle n="01" t="IDENTIFICAÃÃO" />
+        <div style={grid}>
+          <Field label="ID da Nuvemshop" name="idNuvemshop" hint="Ex: NS-2026-042" half />
+          <Field label="Influenciador(a)" name="influenciador" hint="Nome Ã Nuvemshop" half />
+          <Field label="Tema do conteÃºdo" name="tema" hint="TÃ­tulo ou tema da campanha" half />
+          <Field label="Data de publicaÃ§Ã£o" name="dataPublicacao" hint="DD/MM/AAAA â dia da semana" half />
+          <Field label="Entregas" name="entregas" hint="Ex: 01 Reels + combo de stories" half />
+          <Field label="Formato" name="formato" hint="9:16 vertical ou 16:9 horizontal" half />
+          <Field label="Collab" name="collab" hint="@influenciador + @nuvemshop" half />
+          <Field label="ResponsÃ¡vel NS" name="responsavel" hint="Nome | email@nuvemshop.com.br" half />
+        </div>
+      </div>
+    );
+    if (step === 1) return (
+      <div>
+        <SectionTitle n="02" t="CONTEXTO & OBJETIVO" />
+        <div style={grid}>
+          <Field label="Contexto da campanha" name="contexto" type="textarea" rows={4} aiPrompt="contexto da campanha" hint="O que estÃ¡ sendo lanÃ§ado? Por que este influenciador foi escolhido?" />
+          <Field label="Link de materiais de apoio" name="linkMateriais" hint="https://..." half />
+          <div style={{ height: 0, gridColumn: "span 2" }} />
+          <Field label="Objetivo principal" name="objPrincipal" type="textarea" rows={2} aiPrompt="objetivo principal do conteÃºdo" hint="Ex: gerar desejo e autoridade no pÃºblico mid market" />
+          <Field label="Objetivo de conteÃºdo" name="objConteudo" type="textarea" rows={2} aiPrompt="objetivo de conteÃºdo" hint="Ex: evidenciar a marca X como case de sucesso D2C" />
+          <Field label="Objetivo de negÃ³cio" name="objNegocio" type="textarea" rows={2} aiPrompt="objetivo de negÃ³cio" hint="Ex: converter lojistas para o plano Next" />
+        </div>
+      </div>
+    );
+    if (step === 2) return (
+      <div>
+        <SectionTitle n="03" t="CTA & ENTREGAS DETALHADAS" />
+        <div style={grid}>
+          <Field label="CTA â descriÃ§Ã£o" name="cta" type="textarea" rows={2} aiPrompt="call to action do conteÃºdo" hint="Qual aÃ§Ã£o o pÃºblico deve tomar?" />
+          <Field label="Link do CTA" name="linkCta" hint="https://..." half />
+        </div>
+        <div style={{ borderTop: `1px solid ${NS.border}`, margin: "16px 0", paddingTop: 16 }}>
+          <p style={{ fontSize: 12, fontWeight: 500, color: NS.blue, marginBottom: 12 }}>ENTREGA #01</p>
+          <div style={grid}>
+            <Field label="Tema da entrega 1" name="e1tema" hint="Tema especÃ­fico" half />
+            <Field label="Data" name="e1data" hint="DD/MM/AAAA" half />
+            <Field label="Formato" name="e1formato" hint="Reels | Stories | Carrossel" half />
+            <Field label="Objetivo" name="e1objetivo" hint="O que este conteÃºdo deve comunicar" half />
+            <Field label="Destaques (1 por linha)" name="e1destaques" type="textarea" rows={3} aiPrompt="pontos de destaque da entrega 1" hint="Liste os pontos que o influenciador deve destacar" />
+          </div>
+        </div>
+        <div style={{ borderTop: `1px solid ${NS.border}`, margin: "16px 0", paddingTop: 16 }}>
+          <p style={{ fontSize: 12, fontWeight: 500, color: NS.blue, marginBottom: 12 }}>ENTREGA #02 (opcional)</p>
+          <div style={grid}>
+            <Field label="Tema da entrega 2" name="e2tema" hint="Tema especÃ­fico" half />
+            <Field label="Data" name="e2data" hint="DD/MM/AAAA" half />
+            <Field label="Formato" name="e2formato" hint="Reels | Stories | Carrossel" half />
+            <Field label="Objetivo" name="e2objetivo" hint="O que este conteÃºdo deve comunicar" half />
+            <Field label="Destaques (1 por linha)" name="e2destaques" type="textarea" rows={3} aiPrompt="pontos de destaque da entrega 2" hint="Liste os pontos que o influenciador deve destacar" />
+          </div>
+        </div>
+      </div>
+    );
+    if (step === 3) return (
+      <div>
+        <SectionTitle n="04" t="MENSAGENS-CHAVE & ARQUIVOS DO PROJETO" />
+        <div style={grid}>
+          <Field label="Mensagem-chave 1" name="msgChave1" hint="Ex: Maior plataforma de e-commerce da AmÃ©rica Latina" />
+          <Field label="Detalhe / dado de apoio" name="msgChave1sub" hint="Ex: mais de 180 mil lojistas" />
+          <Field label="Mensagem-chave 2" name="msgChave2" hint="Ex: Simplicidade no uso" />
+          <Field label="Detalhe / dado de apoio" name="msgChave2sub" hint="Ex: mais de 65 layouts e milhares de apps" />
+          <Field label="Mensagem-chave 3" name="msgChave3" hint="Ex: Atende todos os tamanhos de marca" />
+          <Field label="Detalhe / dado de apoio" name="msgChave3sub" hint="Ex: do comeÃ§o ao faturamento em milhÃµes" />
+        </div>
+
+        <div style={{ borderTop: `1px solid ${NS.border}`, marginTop: 8, paddingTop: 20 }}>
+          <p style={{ fontSize: 13, fontWeight: 600, color: NS.darkBlue, marginBottom: 6 }}>Arquivo do projeto</p>
+          <p style={{ fontSize: 12, color: NS.gray, marginBottom: 12 }}>
+            Suba um documento com contexto adicional do projeto (PDF, DOCX, TXT ou imagem). A IA vai usar para enriquecer o briefing.
+          </p>
+
+          <input ref={fileRef} type="file" accept=".pdf,.docx,.txt,.png,.jpg,.jpeg" onChange={handleFile}
+            style={{ display: "none" }} />
+          <button onClick={() => fileRef.current?.click()}
+            style={{ padding: "10px 20px", border: `1.5px dashed ${NS.skyBlue}`, borderRadius: 8,
+              background: NS.tint, color: NS.blue, fontSize: 13, cursor: "pointer", width: "100%", textAlign: "center" }}>
+            {fileName ? `ð ${fileName}` : "ï¼  Clique para subir arquivo"}
+          </button>
+
+          {generating && (
+            <p style={{ fontSize: 12, color: NS.skyBlue, marginTop: 8 }}>Processando arquivo...</p>
+          )}
+          {fileCtx && !generating && (
+            <div style={{ marginTop: 12, background: NS.tint, border: `1px solid ${NS.border}`, borderRadius: 6, padding: "10px 14px" }}>
+              <p style={{ fontSize: 11, fontWeight: 600, color: NS.blue, marginBottom: 4 }}>CONTEÃDO EXTRAÃDO â usado como contexto para a IA</p>
+              <p style={{ fontSize: 11, color: NS.darkBlue, lineHeight: 1.6, whiteSpace: "pre-wrap" }}>
+                {fileCtx.slice(0, 400)}{fileCtx.length > 400 ? "..." : ""}
+              </p>
+            </div>
+          )}
+          {fileError && <p style={{ fontSize: 12, color: "#DC2626", marginTop: 6 }}>{fileError}</p>}
+        </div>
+      </div>
+    );
+    if (step === 4) return (
+      <div>
+        <SectionTitle n="05" t="PREVIEW & DOWNLOAD" />
+        <div style={{ background: NS.tint, border: `1px solid ${NS.border}`, borderRadius: 8, padding: "16px 20px", marginBottom: 20 }}>
+          <p style={{ fontSize: 12, fontWeight: 600, color: NS.blue, marginBottom: 10 }}>RESUMO DO BRIEFING</p>
+          <table style={{ width: "100%", fontSize: 12, borderCollapse: "collapse" }}>
+            {[
+              ["ID Nuvemshop", form.idNuvemshop],
+              ["Influenciador(a)", form.influenciador],
+              ["Tema", form.tema],
+              ["Data", form.dataPublicacao],
+              ["Entregas", form.entregas],
+              ["Formato", form.formato],
+              ["ResponsÃ¡vel", form.responsavel],
+            ].map(([l, v]) => v && (
+              <tr key={l}>
+                <td style={{ padding: "4px 8px", color: NS.blue, fontWeight: 600, width: "30%" }}>{l}</td>
+                <td style={{ padding: "4px 8px", color: NS.darkBlue }}>{v}</td>
+              </tr>
+            ))}
+          </table>
+        </div>
+
+        {generatedCtx && (
+          <div style={{ background: NS.lightTint, border: `1.5px solid ${NS.skyBlue}`, borderRadius: 8, padding: "14px 18px", marginBottom: 20 }}>
+            <p style={{ fontSize: 11, fontWeight: 600, color: NS.skyBlue, marginBottom: 6 }}>SÃNTESE GERADA PELA IA</p>
+            <p style={{ fontSize: 13, color: NS.darkBlue, lineHeight: 1.7, whiteSpace: "pre-wrap" }}>{generatedCtx}</p>
+          </div>
+        )}
+
+        {form.contexto && (
+          <div style={{ marginBottom: 16 }}>
+            <p style={{ fontSize: 12, fontWeight: 600, color: NS.darkBlue, marginBottom: 6 }}>CONTEXTO DA CAMPANHA</p>
+            <p style={{ fontSize: 13, color: NS.darkBlue, lineHeight: 1.7, whiteSpace: "pre-wrap" }}>{form.contexto}</p>
+          </div>
+        )}
+
+        <div style={{ display: "flex", gap: 12, marginTop: 24 }}>
+          <button onClick={downloadHTML}
+            style={{ flex: 1, padding: "12px 0", background: NS.blue, color: NS.white,
+              border: "none", borderRadius: 8, fontSize: 14, fontWeight: 600, cursor: "pointer" }}>
+            â  Baixar Briefing (.html)
+          </button>
+          <button onClick={() => setStep(0)}
+            style={{ padding: "12px 20px", background: NS.white, color: NS.blue,
+              border: `1.5px solid ${NS.blue}`, borderRadius: 8, fontSize: 14, cursor: "pointer" }}>
+            Novo briefing
+          </button>
+        </div>
+        <p style={{ fontSize: 11, color: NS.gray, marginTop: 8, textAlign: "center" }}>
+          O arquivo .html abre diretamente no Word e Google Docs com toda a formataÃ§Ã£o da marca.
+        </p>
+      </div>
+    );
+  };
+
+  return (
+    <div style={{ fontFamily: "Inter,sans-serif", maxWidth: 720, margin: "0 auto" }}>
+      <div style={{ background: NS.blue, padding: "20px 28px", borderRadius: "8px 8px 0 0" }}>
+        <p style={{ color: NS.clearBlue, fontSize: 11, fontWeight: 500, marginBottom: 4, letterSpacing: 1 }}>NUVEMSHOP Â· SOCIAL MEDIA</p>
+        <h1 style={{ color: NS.white, fontSize: 22, fontWeight: 700, margin: 0 }}>Gerador de Briefing com IA</h1>
+      </div>
+
+      <div style={{ background: NS.white, border: `1px solid ${NS.border}`, borderTop: "none", padding: "0 28px 28px" }}>
+        <div style={{ display: "flex", gap: 0, borderBottom: `1px solid ${NS.border}`, marginBottom: 28 }}>
+          {STEPS.map((s, i) => (
+            <button key={i} onClick={() => i < step || i === step ? setStep(i) : null}
+              style={{
+                flex: 1, padding: "12px 4px", fontSize: 11, fontWeight: i === step ? 600 : 400,
+                color: i === step ? NS.blue : i < step ? NS.gray : NS.border,
+                background: "none", border: "none", borderBottom: i === step ? `2px solid ${NS.blue}` : "2px solid transparent",
+                cursor: i <= step ? "pointer" : "default", transition: "all 0.15s"
+              }}>
+              {i + 1}. {s}
+            </button>
+          ))}
+        </div>
+
+        {renderStep()}
+
+        {step < 4 && (
+          <div style={{ display: "flex", justifyContent: "space-between", marginTop: 24, paddingTop: 16, borderTop: `1px solid ${NS.border}` }}>
+            <button onClick={() => setStep(s => Math.max(0, s - 1))} disabled={step === 0}
+              style={{ padding: "10px 24px", border: `1px solid ${NS.border}`, background: NS.white,
+                color: step === 0 ? NS.border : NS.darkBlue, borderRadius: 6, fontSize: 13, cursor: step === 0 ? "default" : "pointer" }}>
+              â Anterior
+            </button>
+            {step < 3 ? (
+              <button onClick={() => setStep(s => s + 1)}
+                style={{ padding: "10px 28px", background: NS.blue, color: NS.white,
+                  border: "none", borderRadius: 6, fontSize: 13, fontWeight: 600, cursor: "pointer" }}>
+                PrÃ³ximo â
+              </button>
+            ) : (
+              <button onClick={generateBriefing} disabled={generating}
+                style={{ padding: "10px 28px", background: generating ? NS.clearBlue : NS.skyBlue,
+                  color: NS.white, border: "none", borderRadius: 6, fontSize: 13, fontWeight: 600, cursor: generating ? "default" : "pointer" }}>
+                {generating ? "Gerando com IA..." : "â¦ Gerar Briefing com IA"}
+              </button>
+            )}
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
+
+ReactDOM.createRoot(document.getElementById("root")).render(<BriefingForm/>);
+</script>
+</body>
+</html>
