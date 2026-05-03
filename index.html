@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8"/>
 <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
-<title>Nuvemshop Â· Gerador de Briefing com IA</title>
+<title>Nuvemshop Â· Gerador de Briefhing com IA</title>
 <script src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
 <script src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
 <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
@@ -71,7 +71,7 @@ async function callClaude(userMsg, systemExtra = "") {
   return data.content?.[0]?.text || "";
 }
 
-export default function BriefingForm() {
+function BriefingForm() {
   const [step, setStep] = useState(0);
   const [form, setForm] = useState(INITIAL);
   const [improving, setImproving] = useState({});
